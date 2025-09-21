@@ -27,21 +27,21 @@
  * Architecture:
  *
  *   +------------------+         getMembers()           +--------------------+
- *   |   Source Room    | -----------------------------> |  membersSrc array  |
+ *   |   Source Room    | -----------------------------> |  srcMembers array  |
  *   +------------------+                                +--------------------+
  *                                                           |
- *                                                           |  main(): build Set(personId from membersDst)
- *                                                           |         filter membersSrc by personId not in Set
+ *                                                           |  main(): build Set(personId from dstMembers)
+ *                                                           |         filter srcMembers by personId not in Set
  *                                                           v
  *   +------------------+         getMembers()           +--------------------+
- *   | Destination Room | -----------------------------> |  membersDst array  |
+ *   | Destination Room | -----------------------------> |  dstMembers array  |
  *   +------------------+                                +--------------------+
  *                                                           |
  *                                                           |  (inline diff by personId inside main)
  *                                                           v
- *   +--------------------------------------------------+
- *   |  Missing members (membersToAdd)                  |
- *   +--------------------------------------------------+
+ *   +-------------------------------------------+
+ *   |  Missing members (toAdd)                  |
+ *   +-------------------------------------------+
  *                       |
  *                       | addMember() in parallel (Promise.allSettled)
  *                       v
@@ -129,25 +129,25 @@ async function main() {
 
     // get list of members in both rooms and determine which ones to add to
     // the destination room
-    const [membersSrc, membersDst] = await Promise.all([
+    const [srcMembers, dstMembers] = await Promise.all([
         getMembers(webexToken, srcRoom),
         getMembers(webexToken, dstRoom)
     ]);
 
     // create a list of members missing from the destination room (need to be added)
-    const dstMemberIds = new Set(membersDst.map(item => item.personId));
-    const membersToAdd = membersSrc.filter(item => !dstMemberIds.has(item.personId));
+    const dstMemberIds = new Set(dstMembers.map(item => item.personId));
+    const toAdd = srcMembers.filter(item => !dstMemberIds.has(item.personId));
 
     // Add in parallel, but collect per-member results
     const results = await Promise.allSettled(
-        membersToAdd.map(member => addMember(webexToken, dstRoom, member.personId))
+        toAdd.map(member => addMember(webexToken, dstRoom, member.personId))
     );
 
     return {
-        attempted: membersToAdd.length,
+        attempted: toAdd.length,
         added: results.filter(r => r.status === 'fulfilled').length,
         failed: results
-            .map((r, i) => (r.status === 'rejected' ? { personId: membersToAdd[i].personDisplayName, error: String(r.reason) } : null))
+            .map((r, i) => (r.status === 'rejected' ? { personId: toAdd[i].personDisplayName, error: String(r.reason) } : null))
             .filter(Boolean),
     };
 
