@@ -60,6 +60,7 @@ if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
 const srcRoom = process.env.SRC_ROOM_ID;
 const dstRoom = process.env.DST_ROOM_ID;
 const webexToken = process.env.WEBEX_TOKEN;
+const sendReportTo = process.env.SEND_RESULTS ?? "";
 
 /**
  * Retrieves the list of memberships (room members) from the Webex API for a given room.
@@ -124,6 +125,42 @@ async function addMember(token, roomId, personId) {
     return true;
 }
 
+/**
+ * Format results into Markdown and send them to a Webex user by email.
+ *
+ * @param {string} token - Webex access token with spark:messages_write scope.
+ * @param {string} email - Email address of the user to message.
+ * @param {Object} results - Summary results from main().
+ * @returns {Promise<Object>} Resolves with the Webex API response JSON.
+ */
+async function sendReport(token, email, results) {
+  // Build Markdown summary
+  let markdown = "**Membership updates**\n";
+  markdown += "```json\n";
+  markdown += JSON.stringify(results, null, 2);
+  markdown += "\n```";
+
+  // POST to Webex messages API
+  const response = await fetch("https://webexapis.com/v1/messages", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      toPersonEmail: email,
+      markdown: markdown,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status} – ${text}`);
+  }
+
+  return response.json();
+}
+
 
 async function main() {
 
@@ -143,13 +180,23 @@ async function main() {
         toAdd.map(member => addMember(webexToken, dstRoom, member.personId))
     );
 
-    return {
+    report = {
         attempted: toAdd.length,
         added: results.filter(r => r.status === 'fulfilled').length,
         failed: results
             .map((r, i) => (r.status === 'rejected' ? { personId: toAdd[i].personDisplayName, error: String(r.reason) } : null))
             .filter(Boolean),
     };
+
+    // send the report of the results via Webex to the list of people whose
+    // emails are specified in the environment variable
+    sendReportTo
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean) // removes "", null, undefined
+        .map(email => sendReport(webexToken, email, report));
+
+    return report;
 
 }
 
