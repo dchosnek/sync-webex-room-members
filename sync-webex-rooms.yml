@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Run Webex room membership sync as a Lambda on a daily schedule (noon America/Chicago).
+
+Parameters:
+  S3Bucket:
+    Type: String
+    Description: S3 bucket containing the Lambda deployment ZIP.
+  S3Key:
+    Type: String
+    Description: S3 key (path/filename) of the Lambda deployment ZIP.
+  LambdaFunctionName:
+    Type: String
+    Default: webex-room-members-sync
+    Description: Name for the Lambda function.
+  WebexToken:
+    Type: String
+    NoEcho: true
+    Description: WEBEX_TOKEN with memberships read/write scopes.
+  SrcRoomId:
+    Type: String
+    Description: Source room ID (copy members from).
+  DstRoomId:
+    Type: String
+    Description: Destination room ID (add missing members to).
+  SendReportTo:
+    Type: String
+    Default: ""
+    Description: >
+      Optional comma-delimited list of emails to send results to.
+      Leave blank to disable reporting.
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653]
+    Description: CloudWatch Logs retention in days.
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${LambdaFunctionName}-exec
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Basic logging
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LambdaFunctionName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  WebexSyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs22.x
+      Handler: index.handler   # export your Lambda entry as "exports.handler = async (event) => { ... }"
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+      Timeout: 60              # adjust if you expect many members/rooms
+      MemorySize: 256
+      Environment:
+        Variables:
+          WEBEX_TOKEN: !Ref WebexToken
+          SRC_ROOM_ID: !Ref SrcRoomId
+          DST_ROOM_ID: !Ref DstRoomId
+          SEND_RESULTS: !Ref SendReportTo   # <-- added here
+
+  # EventBridge (CloudWatch Events) rule to run daily at 12:00 PM America/Chicago
+  DailyNoonRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${LambdaFunctionName}-daily-noon
+      Description: Run the Webex membership sync every day at 12:00 PM America/Chicago.
+      ScheduleExpression: cron(0 12 * * ? *)        # 12:00 minute/hour (local to timezone below)
+      ScheduleExpressionTimezone: America/Chicago   # honors DST correctly
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt WebexSyncFunction.Arn
+
+  # Allow EventBridge to invoke the Lambda
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebexSyncFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyNoonRule.Arn
+
+Outputs:
+  FunctionArn:
+    Description: The ARN of the Lambda function
+    Value: !GetAtt WebexSyncFunction.Arn
+  RuleArn:
+    Description: The ARN of the EventBridge schedule rule
+    Value: !GetAtt DailyNoonRule.Arn
