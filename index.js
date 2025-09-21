@@ -1,5 +1,9 @@
 
-require('dotenv').config();
+// Load environment variables from .env file only when NOT running in Lambda
+if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    // eslint-disable-next-line global-require
+    require('dotenv').config();
+}
 
 const srcRoom = process.env.WEBEX_SRC_ROOM;
 const dstRoom = process.env.WEBEX_DST_ROOM;
@@ -114,13 +118,45 @@ async function main() {
 
     // console.log(membersToAdd.map(item => item.personDisplayName))
 
-    // add members who are missing and display the results of those operations
-    const promises = membersToAdd.map(member =>
-        addMember(webexToken, dstRoom, member.personId)
+    // Add in parallel, but collect per-member results
+    const results = await Promise.allSettled(
+        membersToAdd.map(member => addMember(webexToken, dstRoom, member.personId))
     );
-    const results = await Promise.allSettled(promises);
-    console.log(results);
+    return {
+        attempted: membersToAdd.length,
+        added: results.filter(r => r.status === 'fulfilled').length,
+        failed: results
+            .map((r, i) => (r.status === 'rejected' ? { personId: toAdd[i].personId, error: String(r.reason) } : null))
+            .filter(Boolean),
+    };
 
 }
 
-main();
+// --- Local CLI runner: `node index.js` ---
+if (require.main === module) {
+    (async () => {
+        try {
+            const out = await main();
+            console.log(JSON.stringify(out, null, 2));
+        } catch (e) {
+            console.error(e);
+            process.exit(1);
+        }
+    })();
+}
+
+// --- AWS Lambda entry point ---
+exports.handler = async (event) => {
+    try {
+        const result = await main({ webexToken, srcRoom, dstRoom });
+        return {
+            statusCode: 200,
+            body: JSON.stringify(result),
+        };
+    } catch (err) {
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: String(err.message ?? err) }),
+        };
+    }
+};
