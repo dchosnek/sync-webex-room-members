@@ -1,3 +1,55 @@
+/**
+ * Sync Webex Room Memberships
+ *
+ * This script synchronizes members between two Webex rooms using the Webex REST API.
+ * It compares the list of members in a source room against the destination room
+ * and adds any missing members to the destination.
+ *
+ * Usage:
+ *   - Locally: Define WEBEX_TOKEN, SRC_ROOM_ID, and DST_ROOM_ID in a `.env` file
+ *              or your shell environment, then run:
+ *                  node index.js
+ *   - AWS Lambda: Configure the same variables as Lambda environment variables.
+ *                 The function exports `handler` for Lambda invocation.
+ *
+ * Environment Variables:
+ *   WEBEX_TOKEN   – A valid Webex access token with `spark:memberships_read` and
+ *                   `spark:memberships_write` scopes.
+ *   SRC_ROOM_ID   – The Webex room ID to copy members from.
+ *   DST_ROOM_ID   – The Webex room ID to add missing members to.
+ *
+ * Behavior:
+ *   1. Fetches all members from the source and destination rooms.
+ *   2. Determines which source members are not already in the destination (inline diff).
+ *   3. Adds missing members to the destination room in parallel.
+ *   4. Returns a summary of attempted, added, and failed operations.
+ *
+ * Architecture:
+ *
+ *   +------------------+         getMembers()           +--------------------+
+ *   |   Source Room    | -----------------------------> |  membersSrc array  |
+ *   +------------------+                                +--------------------+
+ *                                                           |
+ *                                                           |  main(): build Set(personId from membersDst)
+ *                                                           |         filter membersSrc by personId not in Set
+ *                                                           v
+ *   +------------------+         getMembers()           +--------------------+
+ *   | Destination Room | -----------------------------> |  membersDst array  |
+ *   +------------------+                                +--------------------+
+ *                                                           |
+ *                                                           |  (inline diff by personId inside main)
+ *                                                           v
+ *   +--------------------------------------------------+
+ *   |  Missing members (membersToAdd)                  |
+ *   +--------------------------------------------------+
+ *                       |
+ *                       | addMember() in parallel (Promise.allSettled)
+ *                       v
+ *   +---------------------------+
+ *   | Destination Room Updated  |
+ *   +---------------------------+
+ */
+
 
 // Load environment variables from .env file only when NOT running in Lambda
 if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -5,8 +57,8 @@ if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
     require('dotenv').config();
 }
 
-const srcRoom = process.env.WEBEX_SRC_ROOM;
-const dstRoom = process.env.WEBEX_DST_ROOM;
+const srcRoom = process.env.SRC_ROOM_ID;
+const dstRoom = process.env.DST_ROOM_ID;
 const webexToken = process.env.WEBEX_TOKEN;
 
 /**
@@ -20,10 +72,6 @@ const webexToken = process.env.WEBEX_TOKEN;
  *   representing a person in the room. Throws an error if the HTTP request fails.
  *
  * @throws {Error} If the HTTP response is not OK (non-2xx status).
- *
- * @example
- * const members = await getMembers(process.env.WEBEX_TOKEN, "Y2lzY29...");
- * console.log(members[0].personEmail); // logs the email of the first member
  */
 async function getMembers(token, roomId) {
     const response = await fetch(
@@ -54,16 +102,6 @@ async function getMembers(token, roomId) {
  * @param {string} personId - The Webex person ID of the user to add (use `personEmail` instead if you want to add by email).
  * @returns {Promise<boolean>} Resolves to `true` if the membership was created successfully.
  * @throws {Error} If the HTTP request fails (non-2xx response), includes the status code and error details from Webex.
- *
- * @example
- * try {
- *   const success = await addMember(process.env.WEBEX_TOKEN, "Y2lzY29...", "Y2lzY29zcGFyazovL3VzZXIv1234");
- *   if (success) {
- *     console.log("Member added successfully");
- *   }
- * } catch (err) {
- *   console.error("Failed to add member:", err.message);
- * }
  */
 async function addMember(token, roomId, personId) {
     const response = await fetch("https://webexapis.com/v1/memberships", {
@@ -87,24 +125,6 @@ async function addMember(token, roomId, personId) {
 }
 
 
-/**
- * Returns all membership objects from list1 whose `personId` does not exist in list2.
- *
- * @param {Array<Object>} list1 - Array of membership objects (with a `personId` field).
- * @param {Array<Object>} list2 - Array of membership objects (with a `personId` field).
- * @returns {Array<Object>} Filtered array of membership objects from list1.
- *
- * @example
- * const unique = getUniqueByPersonId(membersSrc, membersDst);
- */
-function getUniqueByPersonId(list1, list2) {
-    // Build a Set of all personIds in list2 for fast lookup
-    const idsInList2 = new Set(list2.map(item => item.personId));
-
-    // Keep only those objects from list1 whose personId is not in list2
-    return list1.filter(item => !idsInList2.has(item.personId));
-}
-
 async function main() {
 
     // get list of members in both rooms and determine which ones to add to
@@ -113,20 +133,21 @@ async function main() {
         getMembers(webexToken, srcRoom),
         getMembers(webexToken, dstRoom)
     ]);
-    const membersToAdd = (getUniqueByPersonId(membersSrc, membersDst));
-    console.log("members to add = " + membersToAdd.length);
 
-    // console.log(membersToAdd.map(item => item.personDisplayName))
+    // create a list of members missing from the destination room (need to be added)
+    const dstMemberIds = new Set(membersDst.map(item => item.personId));
+    const membersToAdd = membersSrc.filter(item => !dstMemberIds.has(item.personId));
 
     // Add in parallel, but collect per-member results
     const results = await Promise.allSettled(
         membersToAdd.map(member => addMember(webexToken, dstRoom, member.personId))
     );
+
     return {
         attempted: membersToAdd.length,
         added: results.filter(r => r.status === 'fulfilled').length,
         failed: results
-            .map((r, i) => (r.status === 'rejected' ? { personId: toAdd[i].personId, error: String(r.reason) } : null))
+            .map((r, i) => (r.status === 'rejected' ? { personId: membersToAdd[i].personDisplayName, error: String(r.reason) } : null))
             .filter(Boolean),
     };
 
