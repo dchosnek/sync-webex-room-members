@@ -80,8 +80,7 @@ Resources:
     Properties:
       Name: !Sub ${LambdaFunctionName}-daily-noon
       Description: Run the Webex membership sync every day at 12:00 PM America/Chicago.
-      ScheduleExpression: cron(0 12 * * ? *)        # 12:00 minute/hour (local to timezone below)
-      ScheduleExpressionTimezone: America/Chicago   # honors DST correctly
+      ScheduleExpression: cron(0 6 * * ? *)        # 6:00PM UTC or noon CST
       State: ENABLED
       Targets:
         - Id: LambdaTarget
