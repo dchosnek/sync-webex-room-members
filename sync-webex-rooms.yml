@@ -8,10 +8,6 @@ Parameters:
   S3Key:
     Type: String
     Description: S3 key (path/filename) of the Lambda deployment ZIP.
-  LambdaFunctionName:
-    Type: String
-    Default: webex-room-members-sync
-    Description: Name for the Lambda function.
   WebexToken:
     Type: String
     NoEcho: true
@@ -30,15 +26,14 @@ Parameters:
       Leave blank to disable reporting.
   LogRetentionDays:
     Type: Number
-    Default: 14
-    AllowedValues: [1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653]
+    Default: 7
+    AllowedValues: [1,3,5,7,14,30,60,90]
     Description: CloudWatch Logs retention in days.
 
 Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${LambdaFunctionName}-exec
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -52,13 +47,12 @@ Resources:
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${LambdaFunctionName}
+      LogGroupName: !Sub '/aws/lambda/${WebexSyncFunction}'
       RetentionInDays: !Ref LogRetentionDays
 
   WebexSyncFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Ref LambdaFunctionName
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: nodejs22.x
       Handler: index.handler   # export your Lambda entry as "exports.handler = async (event) => { ... }"
@@ -72,15 +66,15 @@ Resources:
           WEBEX_TOKEN: !Ref WebexToken
           SRC_ROOM_ID: !Ref SrcRoomId
           DST_ROOM_ID: !Ref DstRoomId
-          SEND_RESULTS: !Ref SendReportTo   # <-- added here
+          SEND_RESULTS: !Ref SendReportTo
 
   # EventBridge (CloudWatch Events) rule to run daily at 12:00 PM America/Chicago
   DailyNoonRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub ${LambdaFunctionName}-daily-noon
+      Name: !Sub '${AWS::StackName}-daily-noon'
       Description: Run the Webex membership sync every day at 12:00 PM America/Chicago.
-      ScheduleExpression: cron(0 6 * * ? *)        # 6:00PM UTC or noon CST
+      ScheduleExpression: cron(0 18 * * ? *)        # 6:00PM UTC or noon CST
       State: ENABLED
       Targets:
         - Id: LambdaTarget
@@ -94,11 +88,3 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DailyNoonRule.Arn
-
-Outputs:
-  FunctionArn:
-    Description: The ARN of the Lambda function
-    Value: !GetAtt WebexSyncFunction.Arn
-  RuleArn:
-    Description: The ARN of the EventBridge schedule rule
-    Value: !GetAtt DailyNoonRule.Arn
