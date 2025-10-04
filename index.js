@@ -134,31 +134,31 @@ async function addMember(token, roomId, personId) {
  * @returns {Promise<Object>} Resolves with the Webex API response JSON.
  */
 async function sendReport(token, email, results) {
-  // Build Markdown summary
-  let markdown = "**Membership updates**\n";
-  markdown += "```json\n";
-  markdown += JSON.stringify(results, null, 2);
-  markdown += "\n```";
+    // Build Markdown summary
+    let markdown = "**Membership updates**\n";
+    markdown += "```json\n";
+    markdown += JSON.stringify(results, null, 2);
+    markdown += "\n```";
 
-  // POST to Webex messages API
-  const response = await fetch("https://webexapis.com/v1/messages", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      toPersonEmail: email,
-      markdown: markdown,
-    }),
-  });
+    // POST to Webex messages API
+    const response = await fetch("https://webexapis.com/v1/messages", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            toPersonEmail: email,
+            markdown: markdown,
+        }),
+    });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`HTTP ${response.status} – ${text}`);
-  }
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status} – ${text}`);
+    }
 
-  return response.json();
+    return response.json();
 }
 
 
@@ -182,7 +182,9 @@ async function main() {
 
     report = {
         attempted: toAdd.length,
-        added: results.filter(r => r.status === 'fulfilled').length,
+        added: results
+            .map((r, i) => (r.status === 'fulfilled' ? toAdd[i].personDisplayName : null))
+            .filter(Boolean), // keeps only display names of successfully added
         failed: results
             .map((r, i) => (r.status === 'rejected' ? { personId: toAdd[i].personDisplayName, error: String(r.reason) } : null))
             .filter(Boolean),
