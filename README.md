@@ -60,7 +60,7 @@ When running it locally:
 
 When running this in AWS, simply deploy the CloudFormation template in this repository. You will be prompted for all the values needed to deploy. CloudFormation will deploy this code as lambda function with the proper permisssion and an event trigger to run the lambda once per day.
 
-## Enironment variables
+## Environment variables
 
 Whether running locally or in AWS, the script depends on environment variables to supply the cusomization that drives the script's performance.
 * **WEBEX_TOKEN**: either your token or your bot's token. This token must be able to read membership in both rooms and *add* memebers to the destination room.
@@ -68,7 +68,7 @@ Whether running locally or in AWS, the script depends on environment variables t
 * **DST_ROOM_ID**: id of the desintation room. Members will be added to this room.
 * **SEND_RESULTS**: comma-delimited list of emails of people who should be notified via Webex every time this script runs. This is an optional field. Leaving it blank or not defining it is allowed.
 
-Here is an example of what the local `.env` file would look like:
+Here is an example of what the local `.env` file would look like (not needed when in AWS):
 
 ```ini
 WEBEX_TOKEN=ZSdxN...
